@@ -1,0 +1,32 @@
+Projet:
+
+1- création du workspace
+
+cmd : mkdir kafka-python && cd kafka-python
+
+2- Création et activation d'un environnement python
+
+cmd : 
+    yum install pip
+    pip install virtualenv
+    virtualenv env
+    source env/bin/activate
+
+3- Installation des libraries
+
+cmd : pip install confluent-kafka
+
+4- Produire des événements
+
+cmd : 
+    chmod u+x producer.py
+    ./producer.py configs.ini 
+
+
+5- Consommer les évènements
+
+cmd :
+    chmod u+x consumer.py
+    ./consumer.py configs.ini 
+
+ 

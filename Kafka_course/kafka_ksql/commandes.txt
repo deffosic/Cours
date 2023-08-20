@@ -1,0 +1,93 @@
+1- Démarrer le serveur ksqlDB
+
+En utilisant docker-compose la commandesuivante permet de lancer les service
+
+cmd : docker-compose up
+
+2- se connecter pas invite de commande
+
+ksqlDB s'execute comme serveur par lequel les clients se connectent pour lancer des commandes
+
+cmd : docker exec -it ksqldb-cli ksql http://ksqldb-server:8088
+
+3- Créer un stream
+
+Dans un premier temps nous il faut créer un stream associer à un topic. Un stream  est essentiellement associé à un schema qui lui même est adossé à un topic.
+
+cmd : CREATE STREAM riderLocations (profileId VARCHAR, latitude Double, longitude Double)
+        WITH (kafka_topic='locations', value_format='json', partitions=1)
+
+    * kafka_topic : nom du topic kafka qui support le stream. S'il n'existe pas il est crée automatiquement
+    * value_format : le format d'encodage des messages stockés. Par exemple, pour le format json nous avons ceci {"profileId": "c2309eec", "latitude":37.7877, "longitude":-122.4205}
+    * partitions : nombre de partitions du topic crée
+
+4- Créer des vues matérialisées
+
+Nous pourrions également vouloir garder une trace de la dernière localisation des coureurs à l'aide d'une vue matérialisée. Pour ce faire, nous créons une table currentLocation en émettant une instruction SELECT sur le flux précédemment créé. Notez que la table sera mise à jour de manière incrémentale au fur et à mesure de l'arrivée de nouvelles données sur l'emplacement des coureurs. Nous utilisons la fonction agrégée LATEST_BY_OFFSET pour indiquer que nous ne nous intéressons qu'à la dernière position d'un coureur.
+
+CREATE TABLE currentLocation AS
+  SELECT profileId,
+         LATEST_BY_OFFSET(latitude) AS la,
+         LATEST_BY_OFFSET(longitude) AS lo
+  FROM riderlocations
+  GROUP BY profileId
+  EMIT CHANGES;
+
+
+Pour rendre les choses plus amusantes, matérialisons également une table dérivée (Table ridersNearMountainView) qui indique la distance qui sépare les coureurs d'un lieu ou d'une ville donné(e).
+
+CREATE TABLE ridersNearMountainView AS
+  SELECT ROUND(GEO_DISTANCE(la, lo, 37.4133, -122.1162), -1) AS distanceInMiles,
+         COLLECT_LIST(profileId) AS riders,
+         COUNT(*) AS count
+  FROM currentLocation
+  GROUP BY ROUND(GEO_DISTANCE(la, lo, 37.4133, -122.1162), -1);
+
+
+Copiez et collez ces instructions de tableau dans votre session CLI interactive et appuyez sur la touche Entrée pour les exécuter.
+
+Consultez la documentation pour plus d'informations sur les tables et les vues matérialisées.
+
+5- Exécution d'une requête "push" sur le flux
+
+Exécutons maintenant une requête push sur le flux. Exécutez la requête donnée à l'aide de votre session CLI interactive.
+
+Cette requête affichera toutes les lignes du flux riderLocations dont les coordonnées se trouvent à moins de 5 miles de Mountain View.
+
+C'est la première chose qui vous semblera peut-être un peu inhabituelle, car la requête ne reviendra jamais jusqu'à ce qu'elle soit terminée. Elle enverra perpétuellement des lignes de sortie au client au fur et à mesure que des événements seront écrits dans le flux riderLocations.
+
+Laissez cette requête en cours d'exécution dans la session CLI pour le moment. Ensuite, nous allons écrire des données dans le flux riderLocations pour que la requête commence à produire des résultats.
+
+cmd : -- Mountain View lat, long: 37.4133, -122.1162
+    SELECT * FROM riderLocations
+        WHERE GEO_DISTANCE(latitude, longitude, 37.4133, -122.1162) <= 5 EMIT CHANGES;
+
+6- Démarrer une autre session CLI
+
+Puisque la session CLI de (4) est occupée à attendre les résultats de la requête push, démarrons une autre session que nous pourrons utiliser pour écrire des données dans ksqlDB
+
+cmd : docker exec -it ksqldb-cli ksql http://ksqldb-server:8088
+
+7- Remplir le flux d'événements
+
+Exécutez chacune des instructions INSERT données dans la nouvelle session CLI, et gardez un œil sur la session CLI de (4) pendant que vous le faites.
+
+La requête push produira les lignes correspondantes en temps réel dès qu'elles seront écrites dans le flux riderLocations.
+
+cmd : 
+    INSERT INTO riderLocations (profileId, latitude, longitude) VALUES ('c2309eec', 37.7877, -122.4205);
+    INSERT INTO riderLocations (profileId, latitude, longitude) VALUES ('18f4ea86', 37.3903, -122.0643);
+    INSERT INTO riderLocations (profileId, latitude, longitude) VALUES ('4ab5cbad', 37.3952, -122.0813);
+    INSERT INTO riderLocations (profileId, latitude, longitude) VALUES ('8b6eae59', 37.3944, -122.0813);
+    INSERT INTO riderLocations (profileId, latitude, longitude) VALUES ('4a7c7b41', 37.4049, -122.0822);
+    INSERT INTO riderLocations (profileId, latitude, longitude) VALUES ('4ddad000', 37.7857, -122.4011);
+
+8- Exécution d'une requête Pull sur la vue matérialisée
+
+Enfin, nous lançons une requête "pull" sur la vue matérialisée pour récupérer tous les coureurs qui se trouvent actuellement à moins de 10 miles de Mountain View.
+
+Contrairement à la requête "push" précédente qui s'exécute en continu, la requête "pull" suit un modèle demande-réponse traditionnel qui récupère le dernier résultat de la vue matérialisée.
+
+cmd : SELECT * from ridersNearMountainView WHERE distanceInMiles <= 10;
+
+
